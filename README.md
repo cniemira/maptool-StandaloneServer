@@ -19,8 +19,9 @@ You can declare any of the following properties to configure the server:
 	server.port   (defaults to 51234)
 	server.gmPassword
 	server.playerPassword
-
-You can also declare the following. The actual value doesn't matter, if you set them at all, they're on.
+	campaign.file
+	
+Because the MapTool server must host a saved campaign, you load a .cmpgn file in the standalone server, but keep in mind that changes will have to be saved on one of the clients. You can also declare the following. The actual value doesn't matter, if you set them at all, they're on.
 
 	log.debug
 	server.useStrictTokenManagement
