@@ -4,7 +4,6 @@
 .mtj.tmp/
 
 # Package Files #
-*.jar
 *.war
 *.ear
 
@@ -14,3 +13,7 @@ hs_err_pid*
 # Eclipse Stuff
 *.classpath
 *.project
+/nbproject/
+/src/nbproject/private/
+/build/
+/dist/

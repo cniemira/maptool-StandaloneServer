@@ -17,15 +17,18 @@ import net.rptools.maptool.model.Asset;
 import net.rptools.maptool.model.AssetManager;
 import net.rptools.maptool.model.Campaign;
 import net.rptools.maptool.model.CampaignFactory;
-import net.rptools.maptool.model.Zone;
 import net.rptools.maptool.model.transform.campaign.AssetNameTransform;
 import net.rptools.maptool.model.transform.campaign.PCVisionTransform;
-import net.rptools.maptool.server.MapToolServer;
-import net.rptools.maptool.server.ServerConfig;
-import net.rptools.maptool.server.ServerPolicy;
 import net.rptools.maptool.transfer.AssetTransferManager;
 import net.rptools.maptool.util.PersistenceUtil.PersistedCampaign;
 import net.rptools.maptool.util.StringUtil;
+import org.apache.commons.cli.CommandLineParser;
+import org.apache.commons.cli.BasicParser;
+import org.apache.commons.cli.CommandLine;
+import org.apache.commons.cli.HelpFormatter;
+import org.apache.commons.cli.Option;
+import org.apache.commons.cli.Options;
+import org.apache.commons.cli.ParseException;
 
 import org.apache.commons.io.IOUtils;
 import org.apache.log4j.Level;
@@ -33,41 +36,33 @@ import org.apache.log4j.Logger;
 
 public class StandaloneServer {
 	private static final Logger log = Logger.getLogger(StandaloneServer.class);
-	
+
 	private static final ModelVersionManager campaignVersionManager = new ModelVersionManager();
 	private static final ModelVersionManager assetnameVersionManager = new ModelVersionManager();
-	
+
 	private static MapToolServer server;
 	private static ServerCommand serverCommand;
-	
+
 	static {
 		PackedFile.init(AppUtil.getAppHome("tmp"));
 		campaignVersionManager.registerTransformation("1.3.51", new PCVisionTransform());
 		assetnameVersionManager.registerTransformation("1.3.51", new AssetNameTransform("^(.*)\\.(dat)?$", "$1"));
 	}
-		
-	private static boolean haveProp(String name) {
-		if(System.getProperty(name) != null) {
-			return true;
-		}
-		return false;
-		
-	}
-	
+
 	private static void loadAssets(Collection<MD5Key> assetIds, PackedFile pakFile) throws IOException {
 		pakFile.getXStream().processAnnotations(Asset.class);
 		String campVersion = (String)pakFile.getProperty("campaignVersion");
-		
+
 		for (MD5Key key : assetIds) {
 			if (key == null) {
 				continue;
 			}
-			
+
 			if (!AssetManager.hasAsset(key)) {
 				String pathname = "assets/" + key;
 				Asset asset;
 				asset = (Asset) pakFile.getFileObject(pathname);
-				
+
 				if (asset == null) {
 					log.error("Referenced asset '" + pathname + "' not found while loading?!");
 					continue;
@@ -84,108 +79,148 @@ public class StandaloneServer {
 					asset.setImage(IOUtils.toByteArray(is));
 					is.close();
 				}
-				
+
 				AssetManager.putAsset(asset);
 				serverCommand.putAsset(asset);
 			}
 		}
 	}
-	
+
 	public static void loadCampaignFile(String filename) throws IOException {
 		File campaignFile = new File(filename);
 		PackedFile pakfile = new PackedFile(campaignFile);
 		pakfile.setModelVersionManager(campaignVersionManager);
-		
+
 		String version = (String)pakfile.getProperty("campaignVersion");
 		version = version == null ? "1.3.50" : version;
 		PersistedCampaign persistedCampaign = (PersistedCampaign) pakfile.getContent(version);
 
 		if (persistedCampaign != null) {
 			server.setCampaign(persistedCampaign.campaign);
-			
+
 			Set<MD5Key> allAssetIds = persistedCampaign.assetMap.keySet();
 			loadAssets(allAssetIds, pakfile);
-			for (Zone zone : persistedCampaign.campaign.getZones()) {
-				zone.optimize();
-			}
 		}
 	}
-	
-    private static void startServer(String id, ServerConfig config, ServerPolicy policy, Campaign campaign) throws IOException {
-        AssetTransferManager assetTransferManager = new AssetTransferManager();
-        assetTransferManager.addConsumerListener(new AssetTransferHandler());
-        assetTransferManager.flush();
 
-        server = new MapToolServer(config, policy);
-        server.setCampaign(campaign);
+	private static void startServer(String id, ServerConfig config, ServerPolicy policy, Campaign campaign) throws IOException {
+		AssetTransferManager assetTransferManager = new AssetTransferManager();
+		assetTransferManager.addConsumerListener(new AssetTransferHandler());
+		assetTransferManager.flush();
 
-        if (config.isServerRegistered()) {
-        	log.debug("Attempting To Register Server");
-            try {
-                    int result = MapToolRegistry.registerInstance(config.getServerName(), config.getPort());
-                    if (result == 3) {
-                            log.error("Already Registered", null);
-                            System.exit(1);
-                    }
-            } catch (Exception e) {
-                    log.error("Could Not Register Server", e);
-                    System.exit(1);
-            }
-        } else {
-        	log.debug("Will Not Register Server");
-        }
-    }
-	
-    
-    public static void main(String [] args) {
-    	org.apache.log4j.BasicConfigurator.configure();
-    	
-    	if(haveProp("log.debug")) {
-    		Logger.getRootLogger().setLevel(Level.DEBUG);
-    	} else {
-    		Logger.getRootLogger().setLevel(Level.INFO);
-    	}
-    	
-    	serverCommand = new ServerCommandClientImpl();
-    	Campaign campaign = CampaignFactory.createBasicCampaign();
-    	
-    	String port_number = System.getProperty("server.port");
-    	int port;
-    	if (port_number == null) {
-    		port = 51234;
-    	} else {
-    		port = Integer.parseInt(port_number);
-    	}
+		server = new MapToolServer(config, policy);
+		server.setCampaign(campaign);
 
-    	ServerConfig config = new ServerConfig("StandaloneServer",
-        		System.getProperty("server.gmPassword"),
-        		System.getProperty("server.playerPassword"),
-        		port,
-        		System.getProperty("server.name"));
+		if (config.isServerRegistered()) {
+			log.debug("Attempting To Register Server");
+			try {
+				int result = MapToolRegistry.registerInstance(config.getServerName(), config.getPort());
+				if (result == 3) {
+					log.error("Already Registered", null);
+					System.exit(1);
+				}
+			} catch (Exception e) {
+				log.error("Could Not Register Server", e);
+				System.exit(1);
+			}
+		} else {
+			log.debug("Will Not Register Server");
+		}
+	}
 
-        ServerPolicy policy = new ServerPolicy();        
-        policy.setUseStrictTokenManagement(haveProp("server.useStrictTokenManagement"));
-        policy.setPlayersCanRevealVision(haveProp("server.playersCanRevealVision"));
-        policy.setUseIndividualViews(haveProp("server.useIndividualViews"));
-        policy.setPlayersReceiveCampaignMacros(haveProp("server.playersReceiveCampaignMacros"));
-        policy.setUseToolTipsForDefaultRollFormat(haveProp("server.useToolTipsForDefaultRollFormat"));
-        policy.setRestrictedImpersonation(haveProp("server.restrictedImpersonation"));
 
-        try {
-        	startServer(null, config, policy, campaign);
-        } catch (Exception e) {
-        	log.error("Could not start server", e);
-        	System.exit(1);
-        }
-        
-        log.info("Started on port " + port);
-        
-    	if (haveProp("campaign.file")) {
-    		try {
-				loadCampaignFile(System.getProperty("campaign.file"));
+	public static void main(String [] args) {
+		org.apache.log4j.BasicConfigurator.configure();
+
+		Options options = new Options();
+		options.addOption("h", "help", false, "Show this help");
+		Option name = new Option("n", "name", true, "The name of the maptools server and registers at rptools.net if set");
+		name.setValueSeparator('=');
+		name.setArgName("SERVERNAME");
+		options.addOption(name);
+		Option port = new Option("p", "port", true, "The port of the maptools server, defaults to 51234");
+		port.setValueSeparator('=');
+		port.setArgName("PORT");
+		options.addOption(port);
+		Option gm = new Option("g", "gmPassword", true, "The GM password a user has to enter, if he wants to be a GM");
+		gm.setValueSeparator('=');
+		gm.setArgName("PASSWORD");
+		options.addOption(gm);
+		Option password = new Option("a", "playerPassword", true, "The player password a user has to enter");
+		password.setValueSeparator('=');
+		password.setArgName("PASSWORD");
+		options.addOption(password);
+		options.addOption("s", "useStrictTokenManagement", false, "Set the strict token management");
+		options.addOption("v", "playersCanRevealVision", false, "The users can reveal the vision");
+		options.addOption("i", "useIndividualViews", false, "Use individual views for each player");
+		options.addOption("m", "playersReceiveCampaignMacros", false, "Send the campaign macros to the users");
+		options.addOption("t", "useToolTipsForDefaultRollFormat", false, "");
+		options.addOption("r", "restrictedImpersonation", false, "Restrict the impersonation of a token to only one user");
+		options.addOption("c", "campaign", true, "The campaign file to load");
+		options.addOption("d", "logDebug", false, "Show debug information");
+		CommandLineParser parser = new BasicParser();
+		CommandLine cmd = null;
+
+		try {
+			cmd = parser.parse(options, args);
+		} catch (ParseException e) {
+			log.error("Something went wrong fetching the cli arguments", e);
+			System.exit(1);
+		}
+
+		if (cmd.hasOption("h") || args.length == 0) {
+			HelpFormatter formatter = new HelpFormatter();
+			formatter.printHelp("test", options);
+			System.exit(0);
+		}
+
+		if(cmd.hasOption("l")) {
+			Logger.getRootLogger().setLevel(Level.DEBUG);
+		} else {
+			Logger.getRootLogger().setLevel(Level.INFO);
+		}
+
+		serverCommand = new ServerCommandClientImpl();
+		Campaign campaign = CampaignFactory.createBasicCampaign();
+
+		String portString = cmd.getOptionValue("p");
+		int portNumber;
+		if (portString == null) {
+			portNumber = 51234;
+		} else {
+			portNumber = Integer.parseInt(portString);
+		}
+
+		ServerConfig config = new ServerConfig("StandaloneServer",
+				cmd.getOptionValue("g"),
+				cmd.getOptionValue("a"),
+				portNumber,
+				cmd.getOptionValue("n"));
+
+		ServerPolicy policy = new ServerPolicy();
+		policy.setUseStrictTokenManagement(cmd.hasOption("s"));
+		policy.setPlayersCanRevealVision(cmd.hasOption("v"));
+		policy.setUseIndividualViews(cmd.hasOption("i"));
+		policy.setPlayersReceiveCampaignMacros(cmd.hasOption("m"));
+		policy.setUseToolTipsForDefaultRollFormat(cmd.hasOption("t"));
+		policy.setRestrictedImpersonation(cmd.hasOption("r"));
+
+		try {
+			startServer(null, config, policy, campaign);
+		} catch (Exception e) {
+			log.error("Could not start server", e);
+			System.exit(1);
+		}
+
+		log.info("Started on port " + port);
+
+		if (cmd.hasOption("c")) {
+			try {
+				loadCampaignFile(cmd.getOptionValue("c"));
+				log.info("Loaded campaign " + cmd.getOptionValue("c"));
 			} catch (IOException e) {
 				log.error("Unable to load campaign", e);
 			}
-    	}
-    }
+		}
+	}
 }
