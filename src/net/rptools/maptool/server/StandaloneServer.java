@@ -152,6 +152,7 @@ public class StandaloneServer {
 		options.addOption(password);
 		options.addOption("s", "useStrictTokenManagement", false, "Set the strict token management");
 		options.addOption("v", "playersCanRevealVision", false, "The users can reveal the vision");
+		options.addOption("e", "autoRevealOnMovement", false, "Vision is auto-revealed on movement (implies -v)");
 		options.addOption("i", "useIndividualViews", false, "Use individual views for each player");
 		options.addOption("m", "playersReceiveCampaignMacros", false, "Send the campaign macros to the users");
 		options.addOption("t", "useToolTipsForDefaultRollFormat", false, "");
@@ -199,12 +200,19 @@ public class StandaloneServer {
 
 		ServerPolicy policy = new ServerPolicy();
 		policy.setUseStrictTokenManagement(cmd.hasOption("s"));
-		policy.setPlayersCanRevealVision(cmd.hasOption("v"));
 		policy.setUseIndividualViews(cmd.hasOption("i"));
 		policy.setPlayersReceiveCampaignMacros(cmd.hasOption("m"));
 		policy.setUseToolTipsForDefaultRollFormat(cmd.hasOption("t"));
 		policy.setRestrictedImpersonation(cmd.hasOption("r"));
 
+		if (cmd.hasOption("e")) {
+			policy.setPlayersCanRevealVision(true);
+			policy.setAutoRevealOnMovement(true);
+		} else {
+			policy.setPlayersCanRevealVision(cmd.hasOption("v"));
+			policy.setAutoRevealOnMovement(false);
+		}
+		
 		try {
 			startServer(null, config, policy, campaign);
 		} catch (Exception e) {
