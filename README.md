@@ -28,6 +28,7 @@ Because the MapTool server must host a saved campaign, you load a .cmpgn file in
 	logDebug
 	useStrictTokenManagement
 	playersCanRevealVision
+	autoRevealOnMovement (implies playersCanRevealVision)
 	useIndividualViews
 	playersReceiveCampaignMacros
 	useToolTipsForDefaultRollFormat
@@ -44,5 +45,6 @@ Something like this should do you fine:
 		--playerPassword="******" \
 		--useStrictTokenManagement \
 		--useIndividualViews \
+		--autoRevealOnMovement \
 		--playersReceiveCampaignMacros \
 		--restrictedImpersonation
