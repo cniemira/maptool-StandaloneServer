@@ -60,8 +60,14 @@ public class StandaloneServer {
 
 			if (!AssetManager.hasAsset(key)) {
 				String pathname = "assets/" + key;
-				Asset asset;
-				asset = (Asset) pakFile.getFileObject(pathname);
+				Asset asset = null;
+				
+				// TODO: This is lame. We should retry here.
+				try {
+					asset = (Asset) pakFile.getFileObject(pathname);
+				} catch (Exception e) {
+					log.info("Exception while handling asset '" + pathname + "'", e);
+				}
 
 				if (asset == null) {
 					log.error("Referenced asset '" + pathname + "' not found while loading?!");
