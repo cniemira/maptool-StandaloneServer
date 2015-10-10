@@ -11,7 +11,7 @@ You can then start the standalone server like so:
 
     java -cp standalone.jar:maptool-1.3.bXX.jar -port="51234"
 
-You can also rename (or better, `ln -s`) maptool-1.3.bXX.jar -> maptool-1.3.jar and run it this way:
+You can also rename (or better, `ln -s`) maptool-1.3.bXX.jar -> maptool.jar and run it this way:
 
 	java -jar standalone.jar
 
