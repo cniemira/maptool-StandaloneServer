@@ -6,11 +6,13 @@ import java.io.InputStream;
 import java.util.Collection;
 import java.util.Set;
 
+import net.rptools.lib.FileUtil;
 import net.rptools.lib.MD5Key;
 import net.rptools.lib.ModelVersionManager;
 import net.rptools.lib.io.PackedFile;
 import net.rptools.maptool.client.AppUtil;
 import net.rptools.maptool.client.AssetTransferHandler;
+import net.rptools.maptool.client.MapTool;
 import net.rptools.maptool.client.MapToolRegistry;
 import net.rptools.maptool.client.ServerCommandClientImpl;
 import net.rptools.maptool.model.Asset;
@@ -22,6 +24,7 @@ import net.rptools.maptool.model.transform.campaign.PCVisionTransform;
 import net.rptools.maptool.transfer.AssetTransferManager;
 import net.rptools.maptool.util.PersistenceUtil.PersistedCampaign;
 import net.rptools.maptool.util.StringUtil;
+
 import org.apache.commons.cli.CommandLineParser;
 import org.apache.commons.cli.BasicParser;
 import org.apache.commons.cli.CommandLine;
@@ -29,7 +32,6 @@ import org.apache.commons.cli.HelpFormatter;
 import org.apache.commons.cli.Option;
 import org.apache.commons.cli.Options;
 import org.apache.commons.cli.ParseException;
-
 import org.apache.commons.io.IOUtils;
 import org.apache.log4j.Level;
 import org.apache.log4j.Logger;
@@ -42,6 +44,137 @@ public class StandaloneServer {
 
 	private static MapToolServer server;
 	private static ServerCommand serverCommand;
+	private static ShutDownHandler shutDownHandler;
+
+	private static class ShutDownHandler extends Thread {
+		private static final String PROP_VERSION = "version"; //$NON-NLS-1$
+		private static final String PROP_CAMPAIGN_VERSION = "campaignVersion"; //$NON-NLS-1$
+		private static final String ASSET_DIR = "assets/"; //$NON-NLS-1$
+		private static final String CAMPAIGN_VERSION = "1.3.85";
+		
+		private Campaign campaign;
+		private File file;
+
+		public void run() {
+			try {
+				if ((this.campaign != null) && (this.file != null)) {
+					log.info("Saving campaign");
+					//This would have been too easy, wouldn't it?
+					//PersistenceUtil.saveCampaign(this.campaign, this.file);
+					this.saveCampaign();
+				}
+			} catch (IOException e) {
+				log.error("Failed to save campaign!");
+			}
+		}
+		
+		private void saveCampaign() throws IOException {			
+			File tmpDir = AppUtil.getTmpDir();
+			File tmpFile = new File(tmpDir.getAbsolutePath(), this.file.getName());
+			if (tmpFile.exists()) {
+				tmpFile.delete();
+			}
+			
+			PackedFile pakFile = null;
+			try {
+				pakFile = new PackedFile(tmpFile);
+				// Configure the meta file (this is for legacy support)
+				PersistedCampaign persistedCampaign = new PersistedCampaign();
+				persistedCampaign.campaign = this.campaign;
+
+				Set<MD5Key> allAssetIds = this.campaign.getAllAssetIds();
+
+				// Special handling of assets:  XML file to describe the Asset, but binary file for the image data
+				pakFile.getXStream().processAnnotations(Asset.class);
+
+				// Store the assets
+				for (MD5Key assetId : allAssetIds) {
+					if (assetId == null)
+						continue;
+
+					/*
+					 * This is a PITA. The way the Asset class determines the image extension when creating an 'Asset'
+					 * object is by opening up the file and passing it through a stream reader. Unfortunately that 
+					 * tries to register a shutdown hook which you can't do when processing a shutdown hook. The workaround
+					 * is disabling the persistent cache at save time. This should cause us to pull assets directly out
+					 * of the assetMap (memory). The down side is that we've created a race condition. If we exit before
+					 * all of the assets are loaded into memory, they're not going to be available and we'll "corrupt" the
+					 * campaign file.
+					 * 
+					 * Alternatively, we can wedge a bogus remote repo into the campaign properties object via
+					 * Campaign.getCampaignProperties and Campaign.mergeCampaignProperties
+					 * and then try to use AssetManager.findAllAssetsNotInRepositories
+					 * I'm not sure this would work, though.
+					 */
+					AssetManager.setUsePersistentCache(false);
+
+					Asset asset = AssetManager.getAsset(assetId);
+					if (asset == null) {
+						log.error("Asset " + assetId + " not found while saving");
+						continue;
+					}
+					persistedCampaign.assetMap.put(assetId, null);
+					pakFile.putFile(ASSET_DIR + assetId + "." + asset.getImageExtension(), asset.getImage());
+					pakFile.putFile(ASSET_DIR + assetId, asset); // Does not write the image
+					log.debug("Asset " + assetId + " saved correctly.");
+				}
+
+				// Write the actual pakfile out
+				try {
+					pakFile.setContent(persistedCampaign);
+					pakFile.setProperty(PROP_VERSION, MapTool.getVersion());
+					pakFile.setProperty(PROP_CAMPAIGN_VERSION, CAMPAIGN_VERSION);
+
+					pakFile.save();
+				} catch (OutOfMemoryError oom) {
+					/*
+					 * This error is normally because the heap space has been
+					 * exceeded while trying to save the campaign. It's not recoverable the way we're handling
+					 * the standalone server right now.
+					 */
+					pakFile.close(); // Have to close the tmpFile first on some OSes
+					pakFile = null;
+					tmpFile.delete(); // Delete the temporary file
+					log.error("Failed to save campaign due to OOM");
+					return;
+				}
+			} finally {
+				try {
+					if (pakFile != null)
+						pakFile.close();
+				} catch (Exception e) {
+					log.error("Failed to write cmpgn file");
+				}
+				pakFile = null;
+			}
+
+			// Copy to the new location
+			// Not the fastest solution in the world if renameTo() fails, but worth the safety net it provides
+			File bakFile = new File(tmpDir.getAbsolutePath(), this.file.getName() + ".bak");
+			bakFile.delete();
+			if (this.file.exists()) {
+				if (!this.file.renameTo(bakFile)) {
+					FileUtil.copyFile(this.file, bakFile);
+					this.file.delete();
+				}
+			}
+			if (!tmpFile.renameTo(this.file)) {
+				FileUtil.copyFile(tmpFile, this.file);
+				tmpFile.delete();
+			}
+			if (bakFile.exists()) {
+				bakFile.delete();
+			}
+		}
+		
+		public void setCampaign(Campaign campaign) {
+			this.campaign = campaign;
+		}
+		
+		public void setFile(File file) {
+			this.file = file;
+		}
+	}
 
 	static {
 		PackedFile.init(AppUtil.getAppHome("tmp"));
@@ -52,7 +185,7 @@ public class StandaloneServer {
 	private static void loadAssets(Collection<MD5Key> assetIds, PackedFile pakFile) throws IOException {
 		pakFile.getXStream().processAnnotations(Asset.class);
 		String campVersion = (String)pakFile.getProperty("campaignVersion");
-
+		
 		for (MD5Key key : assetIds) {
 			if (key == null) {
 				continue;
@@ -67,6 +200,7 @@ public class StandaloneServer {
 					asset = (Asset) pakFile.getFileObject(pathname);
 				} catch (Exception e) {
 					log.info("Exception while handling asset '" + pathname + "'", e);
+					continue;
 				}
 
 				if (asset == null) {
@@ -92,8 +226,7 @@ public class StandaloneServer {
 		}
 	}
 
-	public static void loadCampaignFile(String filename) throws IOException {
-		File campaignFile = new File(filename);
+	public static Campaign loadCampaignFile(File campaignFile) throws IOException {
 		PackedFile pakfile = new PackedFile(campaignFile);
 		pakfile.setModelVersionManager(campaignVersionManager);
 
@@ -107,6 +240,8 @@ public class StandaloneServer {
 			Set<MD5Key> allAssetIds = persistedCampaign.assetMap.keySet();
 			loadAssets(allAssetIds, pakfile);
 		}
+		
+		return persistedCampaign.campaign;
 	}
 
 	private static void startServer(String id, ServerConfig config, ServerPolicy policy, Campaign campaign) throws IOException {
@@ -164,6 +299,7 @@ public class StandaloneServer {
 		options.addOption("t", "useToolTipsForDefaultRollFormat", false, "");
 		options.addOption("r", "restrictedImpersonation", false, "Restrict the impersonation of a token to only one user");
 		options.addOption("c", "campaign", true, "The campaign file to load");
+		options.addOption("o", "saveOnExit", false, "Save the campaign file when exiting");
 		options.addOption("d", "logDebug", false, "Show debug information");
 		CommandLineParser parser = new BasicParser();
 		CommandLine cmd = null;
@@ -227,14 +363,23 @@ public class StandaloneServer {
 		}
 
 		log.info("Started on port " + port);
-
+		
+		shutDownHandler = new ShutDownHandler();
+		Runtime.getRuntime().addShutdownHook(shutDownHandler);
+		
 		if (cmd.hasOption("c")) {
+			File campaignFile = new File(cmd.getOptionValue("c"));
+			if (cmd.hasOption("o")) {
+				shutDownHandler.setFile(campaignFile);
+				log.warn("Save support is experimental!");
+			}
 			try {
-				loadCampaignFile(cmd.getOptionValue("c"));
-				log.info("Loaded campaign " + cmd.getOptionValue("c"));
+				campaign = loadCampaignFile(campaignFile);
+				log.info("Loaded campaign " + campaignFile.getAbsolutePath());
 			} catch (IOException e) {
 				log.error("Unable to load campaign", e);
 			}
 		}
+		shutDownHandler.setCampaign(campaign);
 	}
 }
